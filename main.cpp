@@ -19,10 +19,10 @@
     t2 - maximum time before an instance is finished 
 
     Output:
-    a) Current status of all available instances
-    b) If there is a party in the instance, the status should say "active"
-    c) If the instance is empty, the status should say "empty"
-    d) At the end of the execution there should be a summary of how many parties an instance have served and total time served.
+    a) Display the current status of all available instances (dungeons) everytime a party enters the dungeon or finishes a dungeon.
+       - If there is a party in the instance, the status should say "active"
+       - If the instance is empty, the status should say "empty"
+    b) At the end of the execution there should be a summary of how many parties an instance have served and total time served.
 
     Additional Notes:
     - Proper input validation
@@ -43,46 +43,229 @@
 #include <iostream> 
 #include <limits>
 #include <string> 
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <random>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
 using namespace std;
 
-// Gets the input and checks if valid
-int getValidInteger(const string& prompt) {
-    int integerInput;
-    string input;
-
-    // Keep repeating if input is invalid
-    while (true) {
-        cout << prompt;
-        cin >> input;
-
-        // Check if input is a valid whole number
-        bool isValid = !input.empty();
-        for (char c : input) {
-            if (!isdigit(c)) {
-                isValid = false;
-                break;
+class DungeonManager {
+    private:
+        // Synchronization
+        bool shutdown = false;
+        std::mutex mtx;
+        std::condition_variable cv;
+    
+        // Instance tracking
+        struct DungeonInstance {
+            bool active = false;
+            int tank = 0;
+            int healer = 0;
+            int dps = 0;
+            int partiesServed = 0;
+            int clearTime = 0;
+            double totalTimeServed = 0.0;
+        };
+    
+        // Simulation parameters
+        int maxInstances;
+        int tankPlayers;
+        int healerPlayers;
+        int dpsPlayers;
+        int minTime;
+        int maxTime;
+    
+        // Instances
+        std::vector<DungeonInstance> instances;
+    
+        // Random number generation
+        std::random_device rd;
+        std::mt19937 gen;
+    
+        // Display current status of all instances
+        void displayInstanceStatus() {
+            std::cout << "-----------------------------\n";
+            std::cout << "[CURRENT STATUS]\n";
+            for (size_t i = 0; i < instances.size(); ++i) {
+                std::cout << "  Instance " << i + 1 << ": " 
+                          << (instances[i].active ? "Active" : "Empty") 
+                          << " (Tank: " << instances[i].tank 
+                          << ", Healer: " << instances[i].healer 
+                          << ", DPS: " << instances[i].dps << ") "
+                          << "Clear Time: " << instances[i].clearTime << "\n";
             }
+            std::cout << "-----------------------------\n\n";
         }
+    
+        // Wait for party members, THEN Enter dungeon, THEN Finish
+        void runDungeon(int instanceId) {
+            while (true) {
+                std::unique_lock<std::mutex> lock(mtx);
 
-        // Check if out-of-range
-        if (isValid) {
-            try {
-                size_t pos;
-                integerInput = stoi(input, &pos);
-                if (pos == input.length() && integerInput >= 0) {
-                    cout << "\n";
-                    return integerInput;
+
+                // Wait for a party or shutdown signal
+                cv.wait(lock, [&]() {
+                    return shutdown || 
+                        (instances[instanceId].tank == 1 &&
+                            instances[instanceId].healer == 1 &&
+                            instances[instanceId].dps == 3);
+                });
+
+                // If shutdown is set and no active party, exit the thread
+                if (shutdown && 
+                    instances[instanceId].tank == 0 && 
+                    instances[instanceId].healer == 0 && 
+                    instances[instanceId].dps == 0) {
+                    break;
                 }
-            } catch (...) {
-                // Prevent out-of-range errors
+        
+                // ENTER
+                // Randomly generated clear time
+                std::uniform_int_distribution<> timeDist(minTime, maxTime);
+                instances[instanceId].clearTime = timeDist(gen);
+                //instances[instanceId].active = true;
+
+                std::cout << "Instance " << instanceId + 1 << " (PARTY ENTERED)\n";
+                displayInstanceStatus();         
+
+                // Simulate dungeon running
+                lock.unlock();
+                std::this_thread::sleep_for(std::chrono::seconds(instances[instanceId].clearTime));
+                lock.lock();
+
+                // FINISH
+                instances[instanceId].partiesServed++;
+                instances[instanceId].totalTimeServed += instances[instanceId].clearTime;
+                instances[instanceId].tank--;
+                instances[instanceId].healer--;
+                instances[instanceId].dps -= 3;
+                instances[instanceId].clearTime = 0;
+                instances[instanceId].active = false;
+        
+                std::cout << "Instance " << instanceId + 1 << " (PARTY FINISHED)\n";
+                displayInstanceStatus();
+                
+                // Notify potential waiting parties
+                cv.notify_all();
             }
         }
+    
+    public:
+        DungeonManager(int n, int tanks, int healers, int dpss, int t1, int t2) 
+        : maxInstances(n), tankPlayers(tanks), healerPlayers(healers), 
+          dpsPlayers(dpss), minTime(t1), maxTime(t2), gen(rd()) {
+            
+            // Initialize instances
+            instances.resize(maxInstances);
+        }
 
-        cout << "[INVALID] Please enter a whole number.\n\n";
-        cin.clear();  // Clear error flag
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');   // Clear input
+        void printSummary() {
+            std::cout << "-----------------------------\n";
+            std::cout << "[SUMMARY]\n";
+            int totalPartiesServed = 0;
+            double totalTimeServed = 0.0;
+    
+            for (size_t i = 0; i < instances.size(); ++i) {
+                totalPartiesServed += instances[i].partiesServed;
+                totalTimeServed += instances[i].totalTimeServed;
+    
+                std::cout << "  Instance " << i + 1 
+                          << ": Parties Served = " << instances[i].partiesServed 
+                          << ", Total Time = " << std::fixed << std::setprecision(2) 
+                          << instances[i].totalTimeServed << " seconds\n";
+            }
+    
+            // Print leftover players
+            std::cout << "\n[LEFTOVER]\n";
+            std::cout << "  Tanks: " << tankPlayers << "\n";
+            std::cout << "  Healers: " << healerPlayers << "\n";
+            std::cout << "  DPS: " << dpsPlayers << "\n";
+            std::cout << "-----------------------------\n\n";
+        }
+
+        void processQueue() {
+            std::vector<std::thread> dungeonThreads;
+            for (int i = 0; i < maxInstances; i++) {
+                dungeonThreads.emplace_back(&DungeonManager::runDungeon, this, i);
+            }
+        
+            // Now distribute players to instances
+            int z = 0;
+            while (tankPlayers >= 1 && healerPlayers >= 1 && dpsPlayers >= 3) {
+                // Find an inactive instance
+                if (!instances[z].active) {
+                    instances[z].tank = 1;
+                    instances[z].healer = 1;
+                    instances[z].dps = 3;
+                    instances[z].active = true;
+                    tankPlayers--;
+                    healerPlayers--;
+                    dpsPlayers -= 3;
+
+                    // Notify that a party is available
+                    cv.notify_all();
+                }
+
+                // Loop through instances
+                z = (z + 1) % maxInstances;
+            }
+
+            // Shutdown
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                shutdown = true;
+                cv.notify_all();
+            }
+
+            // Keep threads alive
+            for (auto& thread : dungeonThreads) {
+                thread.join();
+            }
+        }
+    };
+    
+    // Input validation function
+    int getValidInteger(const std::string& prompt) {
+        int integerInput;
+        std::string input;
+
+        // Keep repeating if input is invalid
+        while (true) {
+            std::cout << prompt;
+            std::cin >> input;
+
+            // Check if input is a valid whole number
+            bool isValid = !input.empty();
+            for (char c : input) {
+                if (!std::isdigit(c)) {
+                    isValid = false;
+                    break;
+                }
+            }
+
+            // Check if out-of-range
+            if (isValid) {
+                try {
+                    std::size_t pos;
+                    integerInput = std::stoi(input, &pos);
+                    if (pos == input.length() && integerInput >= 0) {
+                        std::cout << "\n";
+                        return integerInput;
+                    }
+                } catch (...) {
+                    // Prevent out-of-range errors
+                }
+            }
+            std::cout << "[INVALID] Please enter a whole number.\n\n";
+            std::cin.clear();  // Clear error flag
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');   // Clear input
+        }
     }
-}
 
 
 int main() {
@@ -96,13 +279,14 @@ int main() {
     t1 = getValidInteger("(t1) Enter the minimum time before an instance is finished: ");
     t2 = getValidInteger("(t2) Enter the maximum time before an instance is finished: ");
 
-    // For checking purposes
-    cout << "n = " << n 
-    << "\nt = " << t 
-    << "\nh = " << h 
-    << "\nd = " << d 
-    << "\nt1 = " << t1 
-    << "\nt2 = " << t2;
+    // Create and run dungeon manager
+    DungeonManager manager(n, t, h, d, t1, t2);
     
+    // Process the queue
+    manager.processQueue();
+
+    // Print summary
+    manager.printSummary();
+
     return 0;
 }
