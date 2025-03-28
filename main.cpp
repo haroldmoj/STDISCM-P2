@@ -194,9 +194,10 @@ class DungeonManager {
                 dungeonThreads.emplace_back(&DungeonManager::runDungeon, this, i);
             }
         
-            // Now distribute players to instances
+            // istribute players to instances
             int z = 0;
             while (tankPlayers >= 1 && healerPlayers >= 1 && dpsPlayers >= 3) {
+
                 // Find an inactive instance
                 if (!instances[z].active) {
                     instances[z].tank = 1;
